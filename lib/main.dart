@@ -2,6 +2,7 @@
 
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:dowloader/homepage.dart';
 import 'package:dowloader/onlinelist.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
@@ -32,7 +33,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         primarySwatch: Colors.blue,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const HomePage(),
     );
   }
 }
@@ -145,8 +146,11 @@ class _MyHomePageState extends State<MyHomePage> {
     var local_path = dir.path + name;
     final saveDir = Directory(local_path);
     await saveDir.create(recursive: true).then((value) async {
-      String? taskId =
-          await FlutterDownloader.enqueue(url: url, savedDir: local_path);
+      String? taskId = await FlutterDownloader.enqueue(
+          url: url,
+          savedDir: local_path,
+          showNotification: true,
+          openFileFromNotification: true);
       print(taskId);
     });
   }

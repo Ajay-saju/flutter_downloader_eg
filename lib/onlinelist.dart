@@ -1,6 +1,7 @@
+import 'dart:io';
+import 'dart:isolate';
+import 'dart:ui';
 import 'package:flutter/material.dart';
-import 'package:flutter/src/widgets/framework.dart';
-import 'package:flutter/src/widgets/placeholder.dart';
 import 'package:flutter_downloader/flutter_downloader.dart';
 
 class OffLineList extends StatefulWidget {
@@ -12,10 +13,21 @@ class OffLineList extends StatefulWidget {
 
 class _OffLineListState extends State<OffLineList> {
   List<Map> downloadsListMaps = [];
+  ReceivePort port = ReceivePort();
   @override
   void initState() {
     // TODO: implement initState
     super.initState();
+    task();
+    bindBackgroundIsolate();
+    FlutterDownloader.registerCallback(downloadCallback);
+  }
+
+  @override
+  void dispose() {
+    unbindBackgroundIsolate();
+    // TODO: implement dispose
+    super.dispose();
   }
 
   Future task() async {
@@ -38,34 +50,71 @@ class _OffLineListState extends State<OffLineList> {
       appBar: AppBar(
         title: Text('Offline Downloads'),
       ),
-      body: downloadsListMaps.length == 0
-          ? Center(
+      body: downloadsListMaps.isEmpty
+          ? const Center(
               child: Text("No Downloads yet"),
             )
-          : Container(
-              child: ListView.builder(itemBuilder: (context, int i) {
-                Map map = downloadsListMaps[i];
-                String fileName = map['filename'];
-                int progress = map['progress'];
-                DownloadTaskStatus status = map['status'];
-                String id = map['id'];
-                String saveDir = map['savedDirectory'];
-                return Card(
-                  elevation: 10,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.start,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      ListTile(
-                        isThreeLine: false,
-                        title: Text(fileName.toString()),
-                        subtitle: downloadStatusWidget(status),
-                      )
-                    ],
+          : ListView.builder(
+              itemCount: downloadsListMaps.length,
+              itemBuilder: (context, int i) {
+                Map _map = downloadsListMaps[i];
+                String? fileName = _map['filename'];
+                int progress = _map['progress'];
+                DownloadTaskStatus status = _map['status'];
+                String id = _map['id'];
+                String saveDir = _map['savedDirectory'];
+                List<FileSystemEntity> directories =
+                    Directory(saveDir).listSync(followLinks: true);
+                FileSystemEntity? file =
+                    directories.isNotEmpty ? directories.first : null;
+                return GestureDetector(
+                  onTap: () {
+                    if (status == DownloadTaskStatus.complete) {
+                      showDialg(file!);
+                    }
+                  },
+                  child: Card(
+                    elevation: 10,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ListTile(
+                          isThreeLine: false,
+                          title: Text(fileName.toString()),
+                          subtitle: downloadStatusWidget(status),
+                          trailing: SizedBox(
+                            child: buttons(status, id, i),
+                            width: 60,
+                          ),
+                        ),
+                        status == DownloadTaskStatus.complete
+                            ? Container()
+                            : SizedBox(height: 5),
+                        status == DownloadTaskStatus.complete
+                            ? Container()
+                            : Padding(
+                                padding: const EdgeInsets.all(8.0),
+                                child: Column(
+                                  children: [
+                                    Text('$progress%'),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                            child: LinearProgressIndicator(
+                                          value: progress / 100,
+                                        ))
+                                      ],
+                                    )
+                                  ],
+                                ),
+                              ),
+                        SizedBox(height: 10)
+                      ],
+                    ),
                   ),
                 );
               }),
-            ),
     );
   }
 
@@ -92,15 +141,121 @@ class _OffLineListState extends State<OffLineList> {
       task['taskId'] = newTaskID;
       setState(() {});
     }
-    return status== DownloadTaskStatus.canceled ?
-    GestureDetector(
-      onTap: (){
-        FlutterDownloader.retry(taskId: taskId).then((newTaskId) => changeTaskID(taskId, newTaskId!));
-      },
-      child: Icon(Icons.cached, size: 20, color: Colors.green)):status==DownloadTaskStatus.failed? GestureDetector(
-        onTap: (){
-          FlutterDownloader.retry(taskId: taskId).then((newTaskID) {changeTaskID(taskid, newTaskID);} )
-        },
-        child: Icon(Icons.cached, size: 20, color: Colors.green)):,
+
+    return status == DownloadTaskStatus.canceled
+        ? GestureDetector(
+            onTap: () {
+              FlutterDownloader.retry(taskId: taskId)
+                  .then((newTaskId) => changeTaskID(taskId, newTaskId!));
+            },
+            child: Icon(Icons.cached, size: 20, color: Colors.green))
+        : status == DownloadTaskStatus.failed
+            ? GestureDetector(
+                onTap: () {
+                  FlutterDownloader.retry(taskId: taskId).then((newTaskID) {
+                    changeTaskID(taskId, newTaskID!);
+                  });
+                },
+                child: Icon(Icons.cached, size: 20, color: Colors.green))
+            : status == DownloadTaskStatus.paused
+                ? Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      GestureDetector(
+                        onTap: () {
+                          FlutterDownloader.resume(taskId: taskId)
+                              .then((newTaskId) {
+                            changeTaskID(taskId, newTaskId!);
+                          });
+                        },
+                        child: Icon(Icons.play_arrow,
+                            size: 20, color: Colors.blue),
+                      ),
+                      GestureDetector(
+                          onTap: () {
+                            FlutterDownloader.cancel(taskId: taskId);
+                          },
+                          child:
+                              Icon(Icons.close, size: 20, color: Colors.red)),
+                    ],
+                  )
+                : status == DownloadTaskStatus.running
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          GestureDetector(
+                            child: Icon(Icons.pause,
+                                size: 20, color: Colors.green),
+                            onTap: () {
+                              FlutterDownloader.pause(taskId: taskId);
+                            },
+                          ),
+                          GestureDetector(
+                              onTap: () {
+                                FlutterDownloader.cancel(taskId: taskId);
+                              },
+                              child: Icon(Icons.close,
+                                  size: 20, color: Colors.red)),
+                        ],
+                      )
+                    : status == DownloadTaskStatus.complete
+                        ? GestureDetector(
+                            onTap: () {
+                              downloadsListMaps.removeAt(index);
+                              FlutterDownloader.remove(
+                                  taskId: taskId, shouldDeleteContent: true);
+                              setState(() {});
+                            },
+                            child:
+                                Icon(Icons.delete, size: 20, color: Colors.red))
+                        : Container();
+  }
+
+  void bindBackgroundIsolate() {
+    bool isSuccess = IsolateNameServer.registerPortWithName(
+        port.sendPort, 'downloader_send_port');
+    if (!isSuccess) {
+      unbindBackgroundIsolate();
+      bindBackgroundIsolate();
+      return;
+    }
+    port.listen((dynamic data) {
+      String id = data[0];
+      DownloadTaskStatus status = data[1];
+      int progress = data[2];
+      var task = downloadsListMaps.where((element) => element['id'] == id);
+      task.forEach((element) {
+        element['progress'] = progress;
+        element['status'] = status;
+        setState(() {});
+      });
+    });
+  }
+
+  static void downloadCallback(
+      String id, DownloadTaskStatus status, int progress) {
+    final SendPort? send =
+        IsolateNameServer.lookupPortByName('downloader_send_port');
+    send!.send([id, status, progress]);
+  }
+
+  void unbindBackgroundIsolate() {
+    IsolateNameServer.removePortNameMapping('downloader_send_port');
+  }
+
+  showDialg(FileSystemEntity file) {
+    return showDialog(
+        context: context,
+        builder: (context) {
+          return Dialog(
+            child: Container(
+              child: Text("OK"),
+            ),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.all(Radius.circular(8))),
+          );
+        });
   }
 }
